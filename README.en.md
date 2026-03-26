@@ -1,43 +1,41 @@
-# OpenClaw 本地化插件集 (MySQL + Ollama)
+# OpenClaw Local Plugins (MySQL + Ollama)
 
-> **中文 | [English](./README.en.md)**
+Production-ready local plugins for OpenClaw:
 
-面向 OpenClaw 的生产级本地化插件：
+- **Knowledge Base Plugin** (`openclaw-knowledgebase-local-mysql`)
+- **Memory Plugin** (`openclaw-memory-local-mysql`)
 
-- **知识库插件**（`openclaw-knowledgebase-local-mysql`）
-- **记忆插件**（`openclaw-memory-local-mysql`）
+Built for self-hosted deployments with:
 
-特性：
-
-- **MySQL** 持久化存储
-- **Ollama** 向量嵌入
-- **零外部云服务依赖**
+- **MySQL** as durable storage
+- **Ollama** for embeddings
+- **Zero external cloud dependencies**
 
 ---
 
-## 功能概览
+## Features
 
-### 知识库插件
+### Knowledge Base Plugin
 
 - `kb_store` / `kb_store_batch`
 - `kb_search`
 - `kb_scan`
-- 可配置分块策略
+- Configurable chunking strategy
 
-### 记忆插件
+### Memory Plugin
 
 - `memory_store` / `memory_recall` / `memory_forget`
 - `memory_list` / `memory_update` / `memory_explain`
-- Scope 记忆（`global` / `project` / `session`）
-- Session 默认 TTL（7 天）
-- 治理管道：duplicate / refine / conflict / unrelated
-- 唯一 active key 规则（registry 驱动）
-- Recall 分层：rule / project_fact / vector
-- 维护脚本（过期 + 软清理）
+- Scope-aware memory (`global` / `project` / `session`)
+- Session default TTL (7 days)
+- Governance pipeline: duplicate / refine / conflict / unrelated
+- Single-active key policy (registry-driven)
+- Recall layering: rule / project_fact / vector
+- Maintenance script for expiration and soft pruning
 
 ---
 
-## 目录结构
+## Repository Layout
 
 ```text
 .
@@ -68,9 +66,9 @@
 
 ---
 
-## 快速开始
+## Quick Start
 
-### 1) 准备环境
+### 1) Prepare env
 
 ```bash
 git clone <your-repo-url> openclaw-local-plugins
@@ -78,13 +76,13 @@ cd openclaw-local-plugins
 cp infrastructure/.env.example infrastructure/.env
 ```
 
-### 2) 启动基础设施并迁移
+### 2) Start infra and run migrations
 
 ```bash
 ./scripts/start.sh
 ```
 
-### 3) 构建插件
+### 3) Build plugins
 
 ```bash
 cd plugins/openclaw-knowledgebase-local-mysql
@@ -96,28 +94,28 @@ npm install
 npm run build
 ```
 
-### 4) 配置 OpenClaw
+### 4) Configure OpenClaw
 
-使用 `plugins-config-example.json` 作为配置模板。
+Use `plugins-config-example.json` as a template for your OpenClaw config file.
 
 ---
 
-## 运维命令
+## Operations
 
-### 迁移
+### Migrations
 
 ```bash
 node scripts/run-migrations.js
 ```
 
-### 备份 / 恢复
+### Backup / Restore
 
 ```bash
 ./scripts/migrate.sh export
 ./scripts/migrate.sh import
 ```
 
-### 记忆维护
+### Memory maintenance
 
 ```bash
 # dry-run
@@ -129,7 +127,7 @@ node scripts/memory-maintenance.js --expire-now --soft-prune
 
 ---
 
-## 测试
+## Testing
 
 ```bash
 cd plugins/openclaw-memory-local-mysql
@@ -139,14 +137,14 @@ node --test --test-force-exit --test-concurrency=1 tests/*.test.js
 
 ---
 
-## 安全提示
+## Security Notes
 
-- 请勿提交真实凭据。
-- `infrastructure/.env` 仅本地保留。
-- 发布或部署前请轮换数据库密码。
+- Never commit real credentials.
+- Keep `infrastructure/.env` local only.
+- Rotate DB credentials before publishing or deploying.
 
 ---
 
-## 许可证
+## License
 
 MIT License. See [LICENSE](./LICENSE).
