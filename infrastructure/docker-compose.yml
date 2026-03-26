@@ -46,8 +46,13 @@ services:
     image: ollama/ollama:latest
     container_name: openclaw-ollama
     restart: unless-stopped
+    gpus: all
     environment:
       OLLAMA_MODELS: /models
+      OLLAMA_NUM_PARALLEL: 1
+      OLLAMA_MAX_LOADED_MODELS: 1
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
       TZ: Asia/Shanghai
     volumes:
       - ollama_models:/models
@@ -56,7 +61,7 @@ services:
     networks:
       - openclaw-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD", "ollama", "list"]
       interval: 30s
       timeout: 10s
       retries: 3
