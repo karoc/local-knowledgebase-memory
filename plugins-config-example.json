@@ -1,0 +1,60 @@
+{
+  "plugins": {
+    "allow": [
+      "openclaw-knowledgebase-local-mysql",
+      "openclaw-memory-local-mysql"
+    ],
+    "load": {
+      "paths": [
+        "./plugins/openclaw-knowledgebase-local-mysql",
+        "./plugins/openclaw-memory-local-mysql"
+      ]
+    },
+    "entries": {
+      "openclaw-knowledgebase-local-mysql": {
+        "enabled": true,
+        "config": {
+          "mysql": {
+            "host": "localhost",
+            "port": 3307,
+            "user": "root",
+            "password": "CHANGE_ME",
+            "database": "openclaw_knowledge_base"
+          },
+          "ollama": {
+            "baseUrl": "http://localhost:11434",
+            "model": "nomic-embed-text",
+            "dimensions": 768
+          },
+          "defaultTable": "default"
+        }
+      },
+      "openclaw-memory-local-mysql": {
+        "enabled": true,
+        "config": {
+          "mysql": {
+            "host": "localhost",
+            "port": 3307,
+            "user": "root",
+            "password": "CHANGE_ME",
+            "database": "openclaw_memory"
+          },
+          "ollama": {
+            "baseUrl": "http://localhost:11434",
+            "model": "nomic-embed-text",
+            "dimensions": 768
+          },
+          "autoRecall": true,
+          "autoCapture": true,
+          "minRecallScore": 0.3,
+          "sessionTtlDays": 7,
+          "rankingMode": "hybrid",
+          "rankingDebug": false
+        }
+      }
+    },
+    "slots": {
+      "memory": "openclaw-memory-local-mysql"
+    }
+  }
+}

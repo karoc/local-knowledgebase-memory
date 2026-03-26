@@ -1,0 +1,18 @@
+# local env
+infrastructure/.env
+
+# dependencies
+**/node_modules/
+
+# build artifacts (keep plugin dist if you want release bundles; comment out if needed)
+# **/dist/
+
+# logs / temp
+*.log
+*.tmp
+*.swp
+.DS_Store
+
+# editor
+.vscode/
+.idea/

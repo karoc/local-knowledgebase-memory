@@ -1,0 +1,72 @@
+# OpenClaw 自建基础设施
+# 包含: MySQL 8.0 (向量+记忆存储) + Ollama (本地 Embedding)
+# 
+# 启动: cd infrastructure && docker-compose up -d
+# 停止: docker-compose down
+# 查看日志: docker-compose logs -f
+
+services:
+  # ============================================================
+  # MySQL 8.0 - 向量数据与长期记忆存储
+  # ============================================================
+  mysql:
+    image: mysql:8.0
+    container_name: openclaw-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-openclaw_root_2024}
+      MYSQL_DATABASE: openclaw
+      MYSQL_USER: openclaw
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-openclaw_pass}
+      TZ: Asia/Shanghai
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d
+      - ./mysql/conf.d:/etc/mysql/conf.d
+    ports:
+      - "127.0.0.1:3307:3306"
+    networks:
+      - openclaw-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+      - --max-connections=200
+      - --innodb-buffer-pool-size=256M
+
+  # ============================================================
+  # Ollama - 本地 Embedding 模型服务
+  # ============================================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: openclaw-ollama
+    restart: unless-stopped
+    environment:
+      OLLAMA_MODELS: /models
+      TZ: Asia/Shanghai
+    volumes:
+      - ollama_models:/models
+    ports:
+      - "127.0.0.1:11434:11434"
+    networks:
+      - openclaw-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  openclaw-net:
+    driver: bridge
+
+volumes:
+  mysql_data:
+    name: openclaw-mysql-data
+  ollama_models:
+    name: openclaw-ollama-models

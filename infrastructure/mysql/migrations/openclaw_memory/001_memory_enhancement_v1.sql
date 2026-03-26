@@ -1,0 +1,98 @@
+-- Memory enhancement v1 migration
+-- Adds governance fields for active/superseded/expired lifecycle, scope, keys, and TTL.
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND COLUMN_NAME = 'scope');
+SET @stmt := IF(@has = 0, 'ALTER TABLE memories ADD COLUMN scope VARCHAR(32) NOT NULL DEFAULT ''global''', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND COLUMN_NAME = 'subject');
+SET @stmt := IF(@has = 0, 'ALTER TABLE memories ADD COLUMN subject VARCHAR(64) NULL', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND COLUMN_NAME = 'memory_key');
+SET @stmt := IF(@has = 0, 'ALTER TABLE memories ADD COLUMN memory_key VARCHAR(191) NULL', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND COLUMN_NAME = 'status');
+SET @stmt := IF(@has = 0, 'ALTER TABLE memories ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT ''active''', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND COLUMN_NAME = 'source');
+SET @stmt := IF(@has = 0, 'ALTER TABLE memories ADD COLUMN source VARCHAR(32) NOT NULL DEFAULT ''manual''', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND COLUMN_NAME = 'confidence');
+SET @stmt := IF(@has = 0, 'ALTER TABLE memories ADD COLUMN confidence DECIMAL(4,3) NOT NULL DEFAULT 0.800', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND COLUMN_NAME = 'supersedes_id');
+SET @stmt := IF(@has = 0, 'ALTER TABLE memories ADD COLUMN supersedes_id BIGINT NULL', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND COLUMN_NAME = 'replaced_by_id');
+SET @stmt := IF(@has = 0, 'ALTER TABLE memories ADD COLUMN replaced_by_id BIGINT NULL', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND COLUMN_NAME = 'ttl_type');
+SET @stmt := IF(@has = 0, 'ALTER TABLE memories ADD COLUMN ttl_type VARCHAR(32) NOT NULL DEFAULT ''permanent''', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND COLUMN_NAME = 'expires_at');
+SET @stmt := IF(@has = 0, 'ALTER TABLE memories ADD COLUMN expires_at DATETIME NULL', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND COLUMN_NAME = 'project_id');
+SET @stmt := IF(@has = 0, 'ALTER TABLE memories ADD COLUMN project_id VARCHAR(191) NULL', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND COLUMN_NAME = 'session_key');
+SET @stmt := IF(@has = 0, 'ALTER TABLE memories ADD COLUMN session_key VARCHAR(191) NULL', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND COLUMN_NAME = 'tags_json');
+SET @stmt := IF(@has = 0, 'ALTER TABLE memories ADD COLUMN tags_json JSON NULL', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND COLUMN_NAME = 'use_count');
+SET @stmt := IF(@has = 0, 'ALTER TABLE memories ADD COLUMN use_count INT NOT NULL DEFAULT 0', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND COLUMN_NAME = 'last_used_at');
+SET @stmt := IF(@has = 0, 'ALTER TABLE memories ADD COLUMN last_used_at DATETIME NULL', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND COLUMN_NAME = 'updated_at');
+SET @stmt := IF(@has = 0, 'ALTER TABLE memories ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND INDEX_NAME = 'idx_memories_agent_valid');
+SET @stmt := IF(@has = 0, 'CREATE INDEX idx_memories_agent_valid ON memories(agent_id, valid)', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND INDEX_NAME = 'idx_memories_scope_status');
+SET @stmt := IF(@has = 0, 'CREATE INDEX idx_memories_scope_status ON memories(scope, status)', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND INDEX_NAME = 'idx_memories_key_status');
+SET @stmt := IF(@has = 0, 'CREATE INDEX idx_memories_key_status ON memories(memory_key, status)', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND INDEX_NAME = 'idx_memories_project_status');
+SET @stmt := IF(@has = 0, 'CREATE INDEX idx_memories_project_status ON memories(project_id, status)', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND INDEX_NAME = 'idx_memories_session_status');
+SET @stmt := IF(@has = 0, 'CREATE INDEX idx_memories_session_status ON memories(session_key, status)', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @has := (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'memories' AND INDEX_NAME = 'idx_memories_expires_at');
+SET @stmt := IF(@has = 0, 'CREATE INDEX idx_memories_expires_at ON memories(expires_at)', 'DO 0');
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+
+UPDATE memories
+SET scope = COALESCE(NULLIF(scope, ''), 'global'),
+    status = COALESCE(NULLIF(status, ''), 'active'),
+    source = COALESCE(NULLIF(source, ''), 'migrated'),
+    ttl_type = COALESCE(NULLIF(ttl_type, ''), 'permanent'),
+    confidence = COALESCE(confidence, 0.800)
+WHERE 1=1;

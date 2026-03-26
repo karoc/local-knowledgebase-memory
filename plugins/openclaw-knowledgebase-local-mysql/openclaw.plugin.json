@@ -1,0 +1,40 @@
+{
+  "id": "openclaw-knowledgebase-local-mysql",
+  "name": "知识库插件 (本地 MySQL)",
+  "description": "基于自建 MySQL + Ollama 的知识库 RAG 插件",
+  "configSchema": {
+    "type": "object",
+    "required": ["mysql", "ollama"],
+    "properties": {
+      "mysql": {
+        "type": "object",
+        "required": ["host", "user", "password", "database"],
+        "properties": {
+          "host": { "type": "string" },
+          "port": { "type": "number", "default": 3306 },
+          "user": { "type": "string" },
+          "password": { "type": "string" },
+          "database": { "type": "string" }
+        }
+      },
+      "ollama": {
+        "type": "object",
+        "required": ["baseUrl", "model"],
+        "properties": {
+          "baseUrl": { "type": "string", "default": "http://localhost:11434" },
+          "model": { "type": "string", "default": "nomic-embed-text" },
+          "dimensions": { "type": "number", "default": 768 }
+        }
+      },
+      "chunking": {
+        "type": "object",
+        "properties": {
+          "strategy": { "type": "string", "enum": ["paragraph", "fixed", "none"], "default": "paragraph" },
+          "maxChunkSize": { "type": "number", "default": 500 },
+          "overlap": { "type": "number", "default": 100 }
+        }
+      },
+      "defaultTable": { "type": "string", "default": "default" }
+    }
+  }
+}
