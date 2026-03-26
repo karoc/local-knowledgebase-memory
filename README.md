@@ -73,7 +73,7 @@
 ### 1) 准备环境
 
 ```bash
-git clone <your-repo-url> openclaw-local-plugins
+git clone git@github.com:karoc/local-knowledgebase-memory.git openclaw-local-plugins
 cd openclaw-local-plugins
 cp infrastructure/.env.example infrastructure/.env
 ```

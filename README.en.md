@@ -71,7 +71,7 @@ Built for self-hosted deployments with:
 ### 1) Prepare env
 
 ```bash
-git clone <your-repo-url> openclaw-local-plugins
+git clone git@github.com:karoc/local-knowledgebase-memory.git openclaw-local-plugins
 cd openclaw-local-plugins
 cp infrastructure/.env.example infrastructure/.env
 ```

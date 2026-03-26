@@ -5,7 +5,7 @@ Thanks for your interest in contributing.
 ## Development setup
 
 ```bash
-git clone <your-repo-url> openclaw-local-plugins
+git clone git@github.com:karoc/local-knowledgebase-memory.git openclaw-local-plugins
 cd openclaw-local-plugins
 cp infrastructure/.env.example infrastructure/.env
 ./scripts/start.sh
