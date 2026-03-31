@@ -8,7 +8,16 @@
  * - kb_scan: 查看知识库统计
  * - kb_dedupe: 语义去重
  */
-import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
+interface OpenClawPluginApi {
+    pluginConfig: any;
+    logger: {
+        info: (msg: string, ...args: any[]) => void;
+        error: (msg: string, ...args: any[]) => void;
+        warn: (msg: string, ...args: any[]) => void;
+    };
+    registerTool: (tool: any, binding?: any) => void;
+    on: (event: string, handler: Function) => void;
+}
 declare const plugin: {
     id: string;
     register: (api: OpenClawPluginApi) => Promise<void>;

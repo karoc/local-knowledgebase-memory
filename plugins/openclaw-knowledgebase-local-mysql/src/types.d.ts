@@ -11,3 +11,4 @@ declare module 'openclaw/plugin-sdk' {
     on: (event: string, handler: Function) => void;
   }
 }
+

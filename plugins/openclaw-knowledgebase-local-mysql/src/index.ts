@@ -9,7 +9,18 @@
  * - kb_dedupe: 语义去重
  */
 
-import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
+type HookContext = { agentId?: string; projectId?: string; sessionKey?: string };
+
+interface OpenClawPluginApi {
+    pluginConfig: any;
+    logger: {
+        info: (msg: string, ...args: any[]) => void;
+        error: (msg: string, ...args: any[]) => void;
+        warn: (msg: string, ...args: any[]) => void;
+    };
+    registerTool: (tool: any, binding?: any) => void;
+    on: (event: string, handler: Function) => void;
+}
 
 // 配置类型
 interface PluginConfig {
@@ -98,7 +109,7 @@ class KnowledgeBasePlugin {
      */
     private registerTools() {
         // kb_store: 存储单条文本
-        this.api.registerTool({
+        this.api.registerTool((ctx: HookContext) => ({
             name: 'kb_store',
             label: '存储到知识库',
             description: '将文本存储到知识库，自动进行分块和向量化',
@@ -107,17 +118,18 @@ class KnowledgeBasePlugin {
                 properties: {
                     text: { type: 'string', description: '要存储的文本内容' },
                     table: { type: 'string', description: '目标表名（可选，默认使用配置中的 defaultTable）' },
-                    source: { type: 'string', description: '来源标识（可选）' }
+                    source: { type: 'string', description: '来源标识（可选）' },
+                    agentId: { type: 'string', description: 'Agent ID（可选）' }
                 },
                 required: ['text']
             },
             execute: async (_toolCallId: string, params: any) => {
-                return this.handleKBStore(params);
+                return this.handleKBStore({ ...params, agentId: params.agentId || ctx?.agentId });
             }
-        });
+        }));
 
         // kb_store_batch: 批量存储
-        this.api.registerTool({
+        this.api.registerTool((ctx: HookContext) => ({
             name: 'kb_store_batch',
             label: '批量存储到知识库',
             description: '批量存储多条文本到知识库',
@@ -126,17 +138,18 @@ class KnowledgeBasePlugin {
                 properties: {
                     texts: { type: 'array', items: { type: 'string' }, description: '文本数组' },
                     table: { type: 'string', description: '目标表名' },
-                    source: { type: 'string', description: '来源标识' }
+                    source: { type: 'string', description: '来源标识' },
+                    agentId: { type: 'string', description: 'Agent ID（可选）' }
                 },
                 required: ['texts']
             },
             execute: async (_toolCallId: string, params: any) => {
-                return this.handleKBStoreBatch(params);
+                return this.handleKBStoreBatch({ ...params, agentId: params.agentId || ctx?.agentId });
             }
-        });
+        }));
 
         // kb_search: 向量搜索
-        this.api.registerTool({
+        this.api.registerTool((ctx: HookContext) => ({
             name: 'kb_search',
             label: '搜索知识库',
             description: '使用向量相似度搜索知识库',
@@ -146,30 +159,32 @@ class KnowledgeBasePlugin {
                     query: { type: 'string', description: '搜索查询' },
                     table: { type: 'string', description: '搜索的表名' },
                     topK: { type: 'number', description: '返回结果数量，默认 5' },
-                    minScore: { type: 'number', description: '最低相似度阈值 0-1' }
+                    minScore: { type: 'number', description: '最低相似度阈值 0-1' },
+                    agentId: { type: 'string', description: 'Agent ID（可选）' }
                 },
                 required: ['query']
             },
             execute: async (_toolCallId: string, params: any) => {
-                return this.handleKBSearch(params);
+                return this.handleKBSearch({ ...params, agentId: params.agentId || ctx?.agentId });
             }
-        });
+        }));
 
         // kb_scan: 查看统计
-        this.api.registerTool({
+        this.api.registerTool((ctx: HookContext) => ({
             name: 'kb_scan',
             label: '查看知识库统计',
             description: '查看知识库的文档和分块统计信息',
             parameters: {
                 type: 'object',
                 properties: {
-                    table: { type: 'string', description: '表名（可选）' }
+                    table: { type: 'string', description: '表名（可选）' },
+                    agentId: { type: 'string', description: 'Agent ID（可选）' }
                 }
             },
             execute: async (_toolCallId: string, params: any) => {
-                return this.handleKBScan(params);
+                return this.handleKBScan({ ...params, agentId: params.agentId || ctx?.agentId });
             }
-        });
+        }));
     }
 
     /**
@@ -256,8 +271,9 @@ class KnowledgeBasePlugin {
      * 工具执行: kb_store
      */
     async handleKBStore(params: any): Promise<any> {
-        const { text, table: paramTable, source } = params;
+        const { text, table: paramTable, source, agentId } = params;
         const table = paramTable || this.config.defaultTable;
+        const finalAgentId = agentId || 'default';
         
         // 分块
         const chunks = this.chunkText(text);
@@ -268,8 +284,8 @@ class KnowledgeBasePlugin {
             const embedding = await this.getEmbedding(chunk);
             
             await this.mysqlPool.execute(
-                `INSERT INTO kb_documents (table_name, chunk_text, vector, source) VALUES (?, ?, ?, ?)`,
-                [table, chunk, JSON.stringify(embedding), source || 'unknown']
+                `INSERT INTO kb_documents (agent_id, table_name, chunk_text, vector, source) VALUES (?, ?, ?, ?, ?)`,
+                [finalAgentId, table, chunk, JSON.stringify(embedding), source || 'unknown']
             );
         }
         
@@ -285,7 +301,8 @@ class KnowledgeBasePlugin {
      * 工具执行: kb_store_batch
      */
     async handleKBStoreBatch(params: any): Promise<any> {
-        const { texts, table = this.config.defaultTable, source } = params;
+        const { texts, table = this.config.defaultTable, source, agentId } = params;
+        const finalAgentId = agentId || 'default';
         let stored = 0;
         
         for (const text of texts) {
@@ -293,8 +310,8 @@ class KnowledgeBasePlugin {
             for (const chunk of chunks) {
                 const embedding = await this.getEmbedding(chunk);
                 await this.mysqlPool.execute(
-                    `INSERT INTO kb_documents (table_name, chunk_text, vector, source) VALUES (?, ?, ?, ?)`,
-                    [table, chunk, JSON.stringify(embedding), source || 'batch']
+                    `INSERT INTO kb_documents (agent_id, table_name, chunk_text, vector, source) VALUES (?, ?, ?, ?, ?)`,
+                    [finalAgentId, table, chunk, JSON.stringify(embedding), source || 'batch']
                 );
                 stored++;
             }
@@ -312,15 +329,16 @@ class KnowledgeBasePlugin {
      * 工具执行: kb_search
      */
     async handleKBSearch(params: any): Promise<any> {
-        const { query, table = this.config.defaultTable, topK = 5, minScore = 0.3 } = params;
+        const { query, table = this.config.defaultTable, topK = 5, minScore = 0.3, agentId } = params;
+        const finalAgentId = agentId || 'default';
         
         // 获取查询向量
         const queryEmbedding = await this.getEmbedding(query);
         
         // 从数据库获取所有向量（生产环境应使用 HNSW 索引优化）
         const [rows] = await this.mysqlPool.execute(
-            `SELECT id, chunk_text, vector, source, created_at FROM kb_documents WHERE table_name = ?`,
-            [table]
+            `SELECT id, chunk_text, vector, source, created_at FROM kb_documents WHERE agent_id = ? AND table_name = ?`,
+            [finalAgentId, table]
         );
         
         // 计算相似度并排序
@@ -359,13 +377,14 @@ class KnowledgeBasePlugin {
      * 工具执行: kb_scan
      */
     async handleKBScan(params: any): Promise<any> {
-        const { table } = params;
+        const { table, agentId } = params;
+        const finalAgentId = agentId || 'default';
         
-        let query = 'SELECT table_name, COUNT(*) AS count, COALESCE(SUM(CHAR_LENGTH(chunk_text)), 0) AS total_chars FROM kb_documents';
-        const queryParams: any[] = [];
+        let query = 'SELECT table_name, COUNT(*) AS count, COALESCE(SUM(CHAR_LENGTH(chunk_text)), 0) AS total_chars FROM kb_documents WHERE agent_id = ?';
+        const queryParams: any[] = [finalAgentId];
         
         if (table) {
-            query += ' WHERE table_name = ?';
+            query += ' AND table_name = ?';
             queryParams.push(table);
         }
         

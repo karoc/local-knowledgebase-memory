@@ -88,6 +88,7 @@ interface ListParams {
 
 interface UpdateParams {
     memoryId: number;
+    agentId?: string;
     content?: string;
     status?: MemoryStatus;
     confidence?: number;
@@ -104,6 +105,11 @@ interface ExplainParams {
     projectId?: string;
     sessionKey?: string;
     minScore?: number;
+}
+
+interface ForgetParams {
+    memoryId: number;
+    agentId?: string;
 }
 
 class MemoryPlugin {
@@ -139,7 +145,7 @@ class MemoryPlugin {
     }
 
     private registerTools() {
-        this.api.registerTool({
+        this.api.registerTool((ctx: HookContext) => ({
             name: 'memory_recall',
             label: '回忆记忆',
             description: '通过向量相似度检索相关记忆',
@@ -156,10 +162,11 @@ class MemoryPlugin {
                 },
                 required: ['query']
             },
-            execute: async (_toolCallId: string, params: RecallParams) => this.handleRecall(params)
-        });
+            execute: async (_toolCallId: string, params: RecallParams) =>
+                this.handleRecall({ ...params, agentId: params.agentId || ctx?.agentId })
+        }));
 
-        this.api.registerTool({
+        this.api.registerTool((ctx: HookContext) => ({
             name: 'memory_store',
             label: '存储记忆',
             description: '存储新的记忆',
@@ -181,22 +188,26 @@ class MemoryPlugin {
                 },
                 required: ['content']
             },
-            execute: async (_toolCallId: string, params: StoreParams) => this.handleStore(params)
-        });
+            execute: async (_toolCallId: string, params: StoreParams) => this.handleStore(params, ctx?.agentId)
+        }));
 
-        this.api.registerTool({
+        this.api.registerTool((ctx: HookContext) => ({
             name: 'memory_forget',
             label: '忘记记忆',
             description: '删除指定记忆',
             parameters: {
                 type: 'object',
-                properties: { memoryId: { type: 'number', description: '记忆 ID' } },
+                properties: {
+                    memoryId: { type: 'number', description: '记忆 ID' },
+                    agentId: { type: 'string', description: 'Agent ID（可选）' }
+                },
                 required: ['memoryId']
             },
-            execute: async (_toolCallId: string, params: { memoryId: number }) => this.handleForget(params)
-        });
+            execute: async (_toolCallId: string, params: ForgetParams, ctx: any) =>
+                this.handleForget({ ...params, agentId: params.agentId || ctx?.agentId })
+        }));
 
-        this.api.registerTool({
+        this.api.registerTool((ctx: HookContext) => ({
             name: 'memory_list',
             label: '查询记忆',
             description: '按条件查询记忆列表',
@@ -214,10 +225,11 @@ class MemoryPlugin {
                     offset: { type: 'number', description: '偏移（默认 0）' }
                 }
             },
-            execute: async (_toolCallId: string, params: ListParams) => this.handleList(params)
-        });
+            execute: async (_toolCallId: string, params: ListParams) =>
+                this.handleList({ ...params, agentId: params.agentId || ctx?.agentId })
+        }));
 
-        this.api.registerTool({
+        this.api.registerTool((ctx: HookContext) => ({
             name: 'memory_update',
             label: '更新记忆',
             description: '更新记忆内容、状态或元数据',
@@ -225,6 +237,7 @@ class MemoryPlugin {
                 type: 'object',
                 properties: {
                     memoryId: { type: 'number', description: '记忆 ID' },
+                    agentId: { type: 'string', description: 'Agent ID（可选）' },
                     content: { type: 'string', description: '新内容（可选）' },
                     status: { type: 'string', description: '新状态（可选）' },
                     confidence: { type: 'number', description: '新置信度 0-1（可选）' },
@@ -234,10 +247,11 @@ class MemoryPlugin {
                 },
                 required: ['memoryId']
             },
-            execute: async (_toolCallId: string, params: UpdateParams) => this.handleUpdate(params)
-        });
+            execute: async (_toolCallId: string, params: UpdateParams, ctx: any) =>
+                this.handleUpdate({ ...params, agentId: params.agentId || ctx?.agentId })
+        }));
 
-        this.api.registerTool({
+        this.api.registerTool((ctx: HookContext) => ({
             name: 'memory_explain',
             label: '解释记忆',
             description: '解释某条记忆为何被召回或被替代',
@@ -253,8 +267,9 @@ class MemoryPlugin {
                     minScore: { type: 'number', description: '最低相似度阈值（可选）' }
                 }
             },
-            execute: async (_toolCallId: string, params: ExplainParams) => this.handleExplain(params)
-        });
+            execute: async (_toolCallId: string, params: ExplainParams) =>
+                this.handleExplain({ ...params, agentId: params.agentId || ctx?.agentId })
+        }));
     }
 
     private sessionTtlDays(): number {
@@ -940,6 +955,7 @@ class MemoryPlugin {
     }
 
     async handleUpdate(params: UpdateParams) {
+        const agentId = params.agentId || 'default';
         const updates: string[] = [];
         const values: any[] = [];
 
@@ -990,9 +1006,10 @@ class MemoryPlugin {
 
         updates.push('updated_at = NOW()');
         values.push(params.memoryId);
+        values.push(agentId);
 
         const [result]: any = await this.pool.execute(
-            `UPDATE memories SET ${updates.join(', ')} WHERE id = ?`,
+            `UPDATE memories SET ${updates.join(', ')} WHERE id = ? AND agent_id = ?`,
             values
         );
 
@@ -1091,11 +1108,15 @@ class MemoryPlugin {
         return { content: [{ type: 'text', text: '请提供 memoryId 或 query' }] };
     }
 
-    async handleForget(params: { memoryId: number }) {
-        await this.pool.execute(
-            `UPDATE memories SET valid = 0, status = 'deleted', updated_at = NOW() WHERE id = ?`,
-            [params.memoryId]
+    async handleForget(params: ForgetParams) {
+        const agentId = params.agentId || 'default';
+        const [result]: any = await this.pool.execute(
+            `UPDATE memories SET valid = 0, status = 'deleted', updated_at = NOW() WHERE id = ? AND agent_id = ?`,
+            [params.memoryId, agentId]
         );
+        if (!result || result.affectedRows === 0) {
+            return { content: [{ type: 'text', text: `记忆 ${params.memoryId} 不存在或无权限` }] };
+        }
         return { content: [{ type: 'text', text: `记忆 ${params.memoryId} 已删除` }] };
     }
 }
