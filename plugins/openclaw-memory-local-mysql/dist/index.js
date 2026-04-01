@@ -42,8 +42,13 @@ class MemoryPlugin {
     registerMemoryRuntime() {
         if (!this.statusManager)
             this.statusManager = this.buildStatusManager();
+        this.api.logger.info('[memory-local] registerMemoryRuntime invoked');
         this.api.registerMemoryRuntime({
             getMemorySearchManager: async () => {
+                this.api.logger.info('[memory-local] getMemorySearchManager called', {
+                    status: this.health.status,
+                    lastError: this.health.lastError
+                });
                 if (this.health.status === 'unavailable') {
                     return { manager: null, error: this.health.lastError || 'memory plugin unavailable' };
                 }
@@ -63,33 +68,41 @@ class MemoryPlugin {
     }
     buildStatusManager() {
         return {
-            status: () => ({
-                backend: 'qmd',
-                provider: 'openclaw-memory-local-mysql',
-                model: this.config.ollama.model,
-                files: 0,
-                chunks: 0,
-                sources: ['memory'],
-                custom: {
-                    health: {
-                        status: this.health.status,
-                        lastError: this.health.lastError,
-                        lastCheckedAt: this.health.lastCheckedAt,
-                        lastSuccessAt: this.health.lastSuccessAt,
-                        mysql: this.health.mysql,
-                        ollama: this.health.ollama
-                    },
-                    mysql: {
-                        host: this.config.mysql.host,
-                        port: this.config.mysql.port,
-                        database: this.config.mysql.database
-                    },
-                    ollama: {
-                        baseUrl: this.config.ollama.baseUrl,
-                        model: this.config.ollama.model
+            status: () => {
+                this.api.logger.info('[memory-local] status() called', {
+                    status: this.health.status,
+                    lastError: this.health.lastError,
+                    mysql: this.health.mysql,
+                    ollama: this.health.ollama
+                });
+                return {
+                    backend: 'qmd',
+                    provider: 'openclaw-memory-local-mysql',
+                    model: this.config.ollama.model,
+                    files: 0,
+                    chunks: 0,
+                    sources: ['memory'],
+                    custom: {
+                        health: {
+                            status: this.health.status,
+                            lastError: this.health.lastError,
+                            lastCheckedAt: this.health.lastCheckedAt,
+                            lastSuccessAt: this.health.lastSuccessAt,
+                            mysql: this.health.mysql,
+                            ollama: this.health.ollama
+                        },
+                        mysql: {
+                            host: this.config.mysql.host,
+                            port: this.config.mysql.port,
+                            database: this.config.mysql.database
+                        },
+                        ollama: {
+                            baseUrl: this.config.ollama.baseUrl,
+                            model: this.config.ollama.model
+                        }
                     }
-                }
-            }),
+                };
+            },
             probeEmbeddingAvailability: async () => ({
                 ok: this.health.ollama.ok,
                 error: this.health.ollama.ok ? undefined : (this.health.ollama.lastError || this.health.lastError)
@@ -109,6 +122,7 @@ class MemoryPlugin {
         const run = () => void this.runHealthCheck().catch((err) => {
             this.health.status = 'unavailable';
             this.health.lastError = String(err);
+            this.api.logger.error('[memory-local] health check failed', err);
         });
         run();
         if (this.healthTimer)
@@ -146,6 +160,12 @@ class MemoryPlugin {
             this.health.lastError = mysql.error || 'mysql unavailable';
         }
         this.health.lastCheckedAt = now;
+        this.api.logger.info('[memory-local] health updated', {
+            status: this.health.status,
+            lastError: this.health.lastError,
+            mysql: this.health.mysql,
+            ollama: this.health.ollama
+        });
     }
     async probeMysql() {
         try {
