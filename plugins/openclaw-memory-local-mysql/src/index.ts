@@ -151,6 +151,7 @@ class MemoryPlugin {
 
     register() {
         this.initDB();
+        this.ensureStatusStorePath();
         this.registerMemoryRuntime();
         this.registerTools();
         if (this.config.autoRecall !== false) this.api.on('before_agent_start', this.onBeforeStart.bind(this));
@@ -171,6 +172,25 @@ class MemoryPlugin {
             waitForConnections: true,
             connectionLimit: 10
         });
+    }
+
+    private ensureStatusStorePath(agentId = 'main') {
+        try {
+            const os = require('os');
+            const path = require('path');
+            const fs = require('fs');
+            const stateDir = (this.api as any)?.runtime?.state?.resolveStateDir?.(process.env, os.homedir()) || '';
+            if (!stateDir) return;
+            const memoryDir = path.join(stateDir, 'memory');
+            fs.mkdirSync(memoryDir, { recursive: true });
+            const storePath = path.join(memoryDir, `${agentId}.sqlite`);
+            if (!fs.existsSync(storePath)) {
+                fs.writeFileSync(storePath, '');
+            }
+            this.api.logger.info('[memory-local] ensured status store path', { storePath });
+        } catch (err) {
+            this.api.logger.warn('[memory-local] ensure status store path failed', err);
+        }
     }
 
     private registerMemoryRuntime() {
