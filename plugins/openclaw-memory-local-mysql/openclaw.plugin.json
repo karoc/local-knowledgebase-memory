@@ -2,6 +2,7 @@
   "id": "openclaw-memory-local-mysql",
   "name": "记忆插件 (本地 MySQL)",
   "description": "基于自建 MySQL + Ollama 的长期记忆插件",
+  "kind": "memory",
   "configSchema": {
     "type": "object",
     "required": ["mysql", "ollama"],
