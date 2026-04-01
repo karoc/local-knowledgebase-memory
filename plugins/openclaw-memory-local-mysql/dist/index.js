@@ -54,7 +54,6 @@ class MemoryPlugin {
             if (!fs.existsSync(storePath)) {
                 fs.writeFileSync(storePath, '');
             }
-            this.api.logger.info('[memory-local] ensured status store path', { storePath });
         }
         catch (err) {
             this.api.logger.warn('[memory-local] ensure status store path failed', err);
@@ -63,15 +62,9 @@ class MemoryPlugin {
     registerMemoryRuntime() {
         if (!this.statusManager)
             this.statusManager = this.buildStatusManager();
-        this.api.logger.info('[memory-local] registerMemoryRuntime invoked');
         this.api.registerMemoryRuntime({
             getMemorySearchManager: async (args = {}) => {
                 const purpose = args?.purpose;
-                this.api.logger.info('[memory-local] getMemorySearchManager called', {
-                    purpose,
-                    status: this.health.status,
-                    lastError: this.health.lastError
-                });
                 if (purpose === 'status') {
                     try {
                         await this.runHealthCheck();
@@ -101,12 +94,6 @@ class MemoryPlugin {
     buildStatusManager() {
         return {
             status: () => {
-                this.api.logger.info('[memory-local] status() called', {
-                    status: this.health.status,
-                    lastError: this.health.lastError,
-                    mysql: this.health.mysql,
-                    ollama: this.health.ollama
-                });
                 return {
                     backend: 'qmd',
                     provider: 'openclaw-memory-local-mysql',
@@ -192,12 +179,6 @@ class MemoryPlugin {
             this.health.lastError = mysql.error || 'mysql unavailable';
         }
         this.health.lastCheckedAt = now;
-        this.api.logger.info('[memory-local] health updated', {
-            status: this.health.status,
-            lastError: this.health.lastError,
-            mysql: this.health.mysql,
-            ollama: this.health.ollama
-        });
     }
     async probeMysql() {
         try {
