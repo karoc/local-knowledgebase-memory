@@ -11,6 +11,25 @@ type MemorySource = 'manual' | 'auto' | 'inferred' | 'migrated';
 type TTLType = 'permanent' | 'temporary' | 'expiring';
 type MemoryCategory = 'general' | 'preference' | 'environment' | 'workflow' | 'decision' | 'fact' | 'project_fact' | 'temporary' | 'healthcheck';
 
+type MemoryHealthStatus = 'available' | 'degraded' | 'unavailable';
+
+interface MemoryHealthDetail {
+    ok: boolean;
+    lastError?: string;
+    lastCheckedAt?: number;
+    lastSuccessAt?: number;
+}
+
+interface MemoryHealth {
+    status: MemoryHealthStatus;
+    lastError?: string;
+    lastCheckedAt?: number;
+    lastSuccessAt?: number;
+    mysql: MemoryHealthDetail;
+    ollama: MemoryHealthDetail;
+}
+
+
 interface PluginConfig {
     mysql: { host: string; port: number; user: string; password: string; database: string };
     ollama: { baseUrl: string; model: string; dimensions: number };
@@ -116,22 +135,32 @@ class MemoryPlugin {
     private api: OpenClawPluginApi;
     private config: PluginConfig;
     private pool: any = null;
+    private health: MemoryHealth = {
+        status: 'unavailable',
+        lastError: 'not checked yet',
+        mysql: { ok: false },
+        ollama: { ok: false }
+    };
+    private healthTimer: any = null;
+    private statusManager: any = null;
 
     constructor(api: OpenClawPluginApi) {
         this.api = api;
         this.config = api.pluginConfig as PluginConfig;
     }
 
-    async register() {
-        await this.initDB();
-        await this.expireSessionMemories();
+    register() {
+        this.initDB();
+        this.registerMemoryRuntime();
         this.registerTools();
         if (this.config.autoRecall !== false) this.api.on('before_agent_start', this.onBeforeStart.bind(this));
         if (this.config.autoCapture !== false) this.api.on('agent_end', this.onAgentEnd.bind(this));
+        this.startHealthLoop();
+        void this.expireSessionMemories().catch((err) => this.api.logger.error('[memory-local] 过期清理失败:', err));
         this.api.logger.info('[memory-local] 记忆插件注册完成');
     }
 
-    private async initDB() {
+    private initDB() {
         const mysql = require('mysql2/promise');
         this.pool = mysql.createPool({
             host: this.config.mysql.host,
@@ -142,6 +171,136 @@ class MemoryPlugin {
             waitForConnections: true,
             connectionLimit: 10
         });
+    }
+
+    private registerMemoryRuntime() {
+        if (!this.statusManager) this.statusManager = this.buildStatusManager();
+
+        (this.api as any).registerMemoryRuntime({
+            getMemorySearchManager: async () => {
+                if (this.health.status === 'unavailable') {
+                    return { manager: null, error: this.health.lastError || 'memory plugin unavailable' };
+                }
+                return { manager: this.statusManager };
+            },
+            resolveMemoryBackendConfig: () => ({
+                backend: 'qmd',
+                qmd: {
+                    provider: 'mysql',
+                    database: this.config.mysql.database
+                }
+            }),
+            closeAllMemorySearchManagers: async () => {
+                return;
+            }
+        });
+    }
+
+    private buildStatusManager() {
+        return {
+            status: () => ({
+                backend: 'qmd',
+                provider: 'openclaw-memory-local-mysql',
+                model: this.config.ollama.model,
+                files: 0,
+                chunks: 0,
+                sources: ['memory'],
+                custom: {
+                    health: {
+                        status: this.health.status,
+                        lastError: this.health.lastError,
+                        lastCheckedAt: this.health.lastCheckedAt,
+                        lastSuccessAt: this.health.lastSuccessAt,
+                        mysql: this.health.mysql,
+                        ollama: this.health.ollama
+                    },
+                    mysql: {
+                        host: this.config.mysql.host,
+                        port: this.config.mysql.port,
+                        database: this.config.mysql.database
+                    },
+                    ollama: {
+                        baseUrl: this.config.ollama.baseUrl,
+                        model: this.config.ollama.model
+                    }
+                }
+            }),
+            probeEmbeddingAvailability: async () => ({
+                ok: this.health.ollama.ok,
+                error: this.health.ollama.ok ? undefined : (this.health.ollama.lastError || this.health.lastError)
+            }),
+            probeVectorAvailability: async () => this.health.mysql.ok,
+            search: async () => [],
+            readFile: async (params: { relPath: string; from?: number; lines?: number }) => ({
+                path: params.relPath,
+                text: ''
+            }),
+            close: async () => {
+                return;
+            }
+        };
+    }
+
+    private startHealthLoop() {
+        const run = () => void this.runHealthCheck().catch((err) => {
+            this.health.status = 'unavailable';
+            this.health.lastError = String(err);
+        });
+        run();
+        if (this.healthTimer) clearInterval(this.healthTimer);
+        this.healthTimer = setInterval(run, 10_000);
+    }
+
+    private async runHealthCheck() {
+        const now = Date.now();
+        const mysql = await this.probeMysql();
+        const ollama = await this.probeOllama();
+
+        this.health.mysql = {
+            ok: mysql.ok,
+            lastError: mysql.error,
+            lastCheckedAt: now,
+            lastSuccessAt: mysql.ok ? now : this.health.mysql.lastSuccessAt
+        };
+        this.health.ollama = {
+            ok: ollama.ok,
+            lastError: ollama.error,
+            lastCheckedAt: now,
+            lastSuccessAt: ollama.ok ? now : this.health.ollama.lastSuccessAt
+        };
+
+        if (mysql.ok && ollama.ok) {
+            this.health.status = 'available';
+            this.health.lastError = undefined;
+            this.health.lastSuccessAt = now;
+        } else if (mysql.ok) {
+            this.health.status = 'degraded';
+            this.health.lastError = ollama.error || 'ollama unavailable';
+            this.health.lastSuccessAt = now;
+        } else {
+            this.health.status = 'unavailable';
+            this.health.lastError = mysql.error || 'mysql unavailable';
+        }
+        this.health.lastCheckedAt = now;
+    }
+
+    private async probeMysql(): Promise<{ ok: boolean; error?: string }> {
+        try {
+            await this.pool.query('SELECT 1');
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, error: String(err) };
+        }
+    }
+
+    private async probeOllama(): Promise<{ ok: boolean; error?: string }> {
+        try {
+            const res = await fetch(`${this.config.ollama.baseUrl}/api/tags`);
+            if (!res.ok) throw new Error(`Ollama error: ${res.status} ${res.statusText}`);
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, error: String(err) };
+        }
     }
 
     private registerTools() {
@@ -1123,9 +1282,9 @@ class MemoryPlugin {
 
 const plugin = {
     id: 'openclaw-memory-local-mysql',
-    register: async (api: OpenClawPluginApi) => {
+    register: (api: OpenClawPluginApi) => {
         const inst = new MemoryPlugin(api);
-        await inst.register();
+        inst.register();
     }
 };
 
