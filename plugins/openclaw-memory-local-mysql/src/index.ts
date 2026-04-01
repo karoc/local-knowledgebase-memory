@@ -199,11 +199,21 @@ class MemoryPlugin {
         this.api.logger.info('[memory-local] registerMemoryRuntime invoked');
 
         (this.api as any).registerMemoryRuntime({
-            getMemorySearchManager: async () => {
+            getMemorySearchManager: async (args: { purpose?: string } = {}) => {
+                const purpose = args?.purpose;
                 this.api.logger.info('[memory-local] getMemorySearchManager called', {
+                    purpose,
                     status: this.health.status,
                     lastError: this.health.lastError
                 });
+                if (purpose === 'status') {
+                    try {
+                        await this.runHealthCheck();
+                    } catch (err) {
+                        this.api.logger.warn('[memory-local] status health check failed', err);
+                    }
+                    return { manager: this.statusManager };
+                }
                 if (this.health.status === 'unavailable') {
                     return { manager: null, error: this.health.lastError || 'memory plugin unavailable' };
                 }
