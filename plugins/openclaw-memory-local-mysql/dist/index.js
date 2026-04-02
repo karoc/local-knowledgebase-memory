@@ -12,8 +12,94 @@ class MemoryPlugin {
         };
         this.healthTimer = null;
         this.statusManager = null;
+        this.recentConfirmedWritesById = new Map();
+        this.recentConfirmedWritesByExactKey = new Map();
         this.api = api;
         this.config = api.pluginConfig;
+    }
+    normalizeAgentId(agentId) {
+        return (agentId || '').trim() || 'main';
+    }
+    expandAgentAliases(agentId) {
+        const canonical = this.normalizeAgentId(agentId);
+        const aliases = new Set([canonical]);
+        if (canonical === 'main')
+            aliases.add('default');
+        if (canonical === 'default')
+            aliases.add('main');
+        return [...aliases];
+    }
+    normalizeProjectId(projectId) {
+        const value = (projectId || '').trim();
+        if (!value)
+            return null;
+        return value;
+    }
+    expandProjectAliases(projectId) {
+        const normalized = this.normalizeProjectId(projectId);
+        if (!normalized)
+            return [];
+        const aliases = new Set([normalized]);
+        if (normalized === 'openclaw-workspace') {
+            aliases.add('default');
+            aliases.add('/srv/project-openclaw-memory');
+            aliases.add('project-openclaw-memory');
+        }
+        if (normalized === 'default' || normalized === '/srv/project-openclaw-memory' || normalized === 'project-openclaw-memory') {
+            aliases.add('openclaw-workspace');
+        }
+        return [...aliases];
+    }
+    normalizeSessionKey(sessionKey) {
+        const value = (sessionKey || '').trim();
+        if (!value)
+            return null;
+        return value;
+    }
+    expandSessionAliases(sessionKey) {
+        const normalized = this.normalizeSessionKey(sessionKey);
+        if (!normalized)
+            return [];
+        const aliases = new Set([normalized]);
+        const fullMatch = normalized.match(/^agent:[^:]+:[^:]+:[^:]+:(.+)$/);
+        if (fullMatch) {
+            const chatId = fullMatch[1];
+            aliases.add(`chat:${chatId}`);
+            aliases.add(chatId);
+        }
+        else if (normalized.startsWith('chat:')) {
+            const chatId = normalized.slice(5);
+            aliases.add(chatId);
+            aliases.add(`agent:main:feishu:group:${chatId}`);
+        }
+        else {
+            aliases.add(`chat:${normalized}`);
+            aliases.add(`agent:main:feishu:group:${normalized}`);
+        }
+        return [...aliases];
+    }
+    appendInFilter(sql, field, values, queryParams) {
+        if (!values.length)
+            return sql;
+        sql += ` AND ${field} IN (${values.map(() => '?').join(',')})`;
+        queryParams.push(...values);
+        return sql;
+    }
+    normalizeOptionalString(value) {
+        const normalized = (value || '').trim();
+        return normalized || null;
+    }
+    normalizeExpiresAt(expiresAt) {
+        const normalized = this.normalizeOptionalString(expiresAt);
+        if (!normalized)
+            return null;
+        if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(normalized))
+            return normalized;
+        const parsed = new Date(normalized);
+        if (Number.isNaN(parsed.getTime()))
+            return normalized;
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${parsed.getUTCFullYear()}-${pad(parsed.getUTCMonth() + 1)}-${pad(parsed.getUTCDate())} ${pad(parsed.getUTCHours())}:${pad(parsed.getUTCMinutes())}:${pad(parsed.getUTCSeconds())}`;
     }
     register() {
         this.initDB();
@@ -257,6 +343,20 @@ class MemoryPlugin {
                 required: ['memoryId']
             },
             execute: async (_toolCallId, params, ctx) => this.handleForget({ ...params, agentId: params.agentId || ctx?.agentId })
+        }));
+        this.api.registerTool((ctx) => ({
+            name: 'memory_get',
+            label: '读取记忆',
+            description: '按 ID 读取单条记忆，适合做写后确认',
+            parameters: {
+                type: 'object',
+                properties: {
+                    memoryId: { type: 'number', description: '记忆 ID' },
+                    agentId: { type: 'string', description: 'Agent ID（可选）' }
+                },
+                required: ['memoryId']
+            },
+            execute: async (_toolCallId, params) => this.handleGet({ ...params, agentId: params.agentId || ctx?.agentId })
         }));
         this.api.registerTool((ctx) => ({
             name: 'memory_list',
@@ -610,6 +710,124 @@ class MemoryPlugin {
         }
         return { ttlType: ttlType || 'permanent', expiresAt: null };
     }
+    async fetchMemoryById(memoryId, agentId) {
+        const agentAliases = this.expandAgentAliases(agentId);
+        const [rows] = await this.pool.query(`SELECT * FROM memories WHERE id = ? AND agent_id IN (${agentAliases.map(() => '?').join(',')}) LIMIT 1`, [memoryId, ...agentAliases]);
+        if (!Array.isArray(rows) || !rows.length)
+            return null;
+        return rows[0];
+    }
+    isExactMatchListRequest(params) {
+        return !!(params.scope && params.memoryKey && params.source && (params.projectAliases.length || params.sessionAliases.length));
+    }
+    sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+    recentWriteTtlMs() {
+        return 5000;
+    }
+    buildExactMatchCacheKey(entry) {
+        return [
+            this.normalizeAgentId(entry.agentId),
+            entry.scope || '',
+            this.normalizeProjectId(entry.projectId) || '',
+            this.normalizeSessionKey(entry.sessionKey) || '',
+            this.normalizeOptionalString(entry.memoryKey) || '',
+            this.normalizeOptionalString(entry.source) || '',
+            this.normalizeOptionalString(entry.status) || ''
+        ].join('|');
+    }
+    pruneRecentConfirmedWrites() {
+        const now = Date.now();
+        for (const [id, entry] of this.recentConfirmedWritesById.entries()) {
+            if (entry.expiresAt <= now)
+                this.recentConfirmedWritesById.delete(id);
+        }
+        for (const [key, entries] of this.recentConfirmedWritesByExactKey.entries()) {
+            const alive = entries.filter((entry) => entry.expiresAt > now);
+            if (alive.length)
+                this.recentConfirmedWritesByExactKey.set(key, alive);
+            else
+                this.recentConfirmedWritesByExactKey.delete(key);
+        }
+    }
+    recordRecentConfirmedWrite(entry) {
+        this.pruneRecentConfirmedWrites();
+        const now = Date.now();
+        const item = {
+            ...entry,
+            confirmedAt: now,
+            expiresAt: now + this.recentWriteTtlMs()
+        };
+        this.recentConfirmedWritesById.set(item.memoryId, item);
+        const key = this.buildExactMatchCacheKey(item);
+        const existing = this.recentConfirmedWritesByExactKey.get(key) || [];
+        this.recentConfirmedWritesByExactKey.set(key, [item, ...existing.filter((x) => x.memoryId !== item.memoryId)].slice(0, 10));
+    }
+    getRecentConfirmedWriteById(memoryId) {
+        this.pruneRecentConfirmedWrites();
+        return this.recentConfirmedWritesById.get(memoryId) || null;
+    }
+    getRecentConfirmedWritesByExactKey(entry) {
+        this.pruneRecentConfirmedWrites();
+        return this.recentConfirmedWritesByExactKey.get(this.buildExactMatchCacheKey(entry)) || [];
+    }
+    rowMatchesExactFilters(row, filters) {
+        if (!row)
+            return false;
+        if (filters.agentAliases.length && !filters.agentAliases.includes(String(row.agent_id || '')))
+            return false;
+        if (filters.scope && String(row.scope || '') !== filters.scope)
+            return false;
+        if (filters.status && String(row.status || '') !== filters.status)
+            return false;
+        if (filters.projectAliases.length && !filters.projectAliases.includes(String(row.project_id || '')))
+            return false;
+        if (filters.sessionAliases.length && !filters.sessionAliases.includes(String(row.session_key || '')))
+            return false;
+        if (filters.memoryKey && String(row.memory_key || '') !== filters.memoryKey)
+            return false;
+        if (filters.source && String(row.source || '') !== filters.source)
+            return false;
+        return true;
+    }
+    traceTool(event, payload = {}) {
+        try {
+            this.api.logger.info(`[memory-local][trace] ${event} ${JSON.stringify({ ts: Date.now(), ...payload })}`);
+        }
+        catch (err) {
+            this.api.logger.info(`[memory-local][trace] ${event}`);
+        }
+    }
+    async confirmStoredMemory(memoryId, expected) {
+        const row = await this.fetchMemoryById(memoryId, expected.agentId);
+        if (!row) {
+            throw new Error(`memory stored but confirmation read failed: id=${memoryId}`);
+        }
+        if ((row.scope || null) !== expected.scope) {
+            throw new Error(`memory confirmation scope mismatch: id=${memoryId}, expected=${expected.scope}, actual=${row.scope}`);
+        }
+        if ((row.project_id || null) !== (expected.projectId || null)) {
+            throw new Error(`memory confirmation project_id mismatch: id=${memoryId}, expected=${expected.projectId || null}, actual=${row.project_id || null}`);
+        }
+        if ((row.session_key || null) !== (expected.sessionKey || null)) {
+            throw new Error(`memory confirmation session_key mismatch: id=${memoryId}, expected=${expected.sessionKey || null}, actual=${row.session_key || null}`);
+        }
+        if ((row.memory_key || null) !== (expected.memoryKey || null)) {
+            throw new Error(`memory confirmation memory_key mismatch: id=${memoryId}, expected=${expected.memoryKey || null}, actual=${row.memory_key || null}`);
+        }
+        this.recordRecentConfirmedWrite({
+            memoryId,
+            agentId: expected.agentId,
+            scope: expected.scope,
+            projectId: expected.projectId || null,
+            sessionKey: expected.sessionKey || null,
+            memoryKey: expected.memoryKey || null,
+            source: row.source || null,
+            status: row.status || null
+        });
+        return row;
+    }
     buildMemoryLockName(agentId, scope, memoryKey, projectId, sessionKey) {
         const base = `${agentId}|${scope}|${memoryKey}|${projectId || ''}|${sessionKey || ''}`;
         const safe = base.replace(/[^a-zA-Z0-9|:_-]/g, '_');
@@ -718,26 +936,30 @@ class MemoryPlugin {
         }
     }
     async handleRecall(params) {
-        const { query, agentId = 'default', projectId, sessionKey, scope, limit = 5, minScore } = params;
+        const { query, projectId, sessionKey, scope, limit = 5, minScore } = params;
+        const agentId = this.normalizeAgentId(params.agentId);
+        const agentAliases = this.expandAgentAliases(agentId);
+        const projectAliases = this.expandProjectAliases(projectId);
+        const sessionAliases = this.expandSessionAliases(sessionKey);
         const qEmb = await this.getEmbedding(query);
         let sql = `SELECT id, content, vector, category, agent_id, valid, scope, subject, memory_key, importance, confidence, project_id, session_key, use_count, last_used_at, created_at, updated_at
                    FROM memories
-                   WHERE agent_id = ?
-                     AND valid = 1
+                   WHERE valid = 1
                      AND status = 'active'
                      AND (expires_at IS NULL OR expires_at > NOW())`;
-        const queryParams = [agentId];
+        const queryParams = [];
+        sql = this.appendInFilter(sql, 'agent_id', agentAliases, queryParams);
         if (scope) {
             sql += ' AND scope = ?';
             queryParams.push(scope);
         }
-        if (projectId) {
-            sql += ' AND (project_id = ? OR project_id IS NULL)';
-            queryParams.push(projectId);
+        if (projectAliases.length) {
+            sql += ` AND (project_id IN (${projectAliases.map(() => '?').join(',')}) OR project_id IS NULL)`;
+            queryParams.push(...projectAliases);
         }
-        if (sessionKey) {
-            sql += ' AND (session_key = ? OR session_key IS NULL)';
-            queryParams.push(sessionKey);
+        if (sessionAliases.length) {
+            sql += ` AND (session_key IN (${sessionAliases.map(() => '?').join(',')}) OR session_key IS NULL)`;
+            queryParams.push(...sessionAliases);
         }
         sql += ' ORDER BY id DESC';
         const [rows] = await this.pool.query(sql, queryParams);
@@ -790,22 +1012,33 @@ class MemoryPlugin {
         };
     }
     async handleStore(params, forcedAgentId) {
-        const agentId = forcedAgentId || 'default';
+        const agentId = this.normalizeAgentId(forcedAgentId);
+        this.traceTool('memory_store.start', {
+            agentId,
+            scope: params.scope || 'global',
+            projectId: params.projectId || null,
+            sessionKey: params.sessionKey || null,
+            memoryKey: params.memoryKey || null,
+            source: params.source || 'manual'
+        });
         const content = params.content;
         const category = params.category || 'general';
         const importance = params.importance || 3;
         const scope = params.scope || 'global';
         const source = params.source || 'manual';
+        const projectId = this.normalizeProjectId(params.projectId) || undefined;
+        const sessionKey = this.normalizeSessionKey(params.sessionKey) || undefined;
+        const normalizedExpiresAt = this.normalizeExpiresAt(params.expiresAt);
         const confidenceRaw = typeof params.confidence === 'number' ? params.confidence : 0.9;
         const confidence = Math.max(0, Math.min(1, confidenceRaw));
         const inferred = this.inferMemoryKey(content, category, scope);
         const memoryKey = params.memoryKey || inferred.memoryKey || null;
         const subject = inferred.subject;
-        const ttl = this.resolveSessionExpiry(scope, params.ttlType, params.expiresAt);
+        const ttl = this.resolveSessionExpiry(scope, params.ttlType, normalizedExpiresAt || undefined);
         const tagsJson = params.tags ? JSON.stringify(params.tags) : null;
         if (memoryKey && this.needsUniqueActive(memoryKey)) {
             const conn = await this.pool.getConnection();
-            const lockName = this.buildMemoryLockName(agentId, scope, memoryKey, params.projectId, params.sessionKey);
+            const lockName = this.buildMemoryLockName(agentId, scope, memoryKey, projectId, sessionKey);
             try {
                 const [lockRows] = await conn.query('SELECT GET_LOCK(?, 5) AS got_lock', [lockName]);
                 const gotLock = Array.isArray(lockRows) && lockRows[0] && Number(lockRows[0].got_lock) === 1;
@@ -818,11 +1051,11 @@ class MemoryPlugin {
                 const lockParams = [agentId, scope, memoryKey];
                 if (scope === 'project') {
                     lockSql += ' AND project_id <=> ?';
-                    lockParams.push(params.projectId || null);
+                    lockParams.push(projectId || null);
                 }
                 if (scope === 'session') {
                     lockSql += ' AND session_key <=> ?';
-                    lockParams.push(params.sessionKey || null);
+                    lockParams.push(sessionKey || null);
                 }
                 lockSql += ` AND (expires_at IS NULL OR expires_at > NOW()) ORDER BY id DESC`;
                 const [lockedRows] = await conn.query(lockSql, lockParams);
@@ -836,9 +1069,35 @@ class MemoryPlugin {
                     if (relation === 'duplicate') {
                         await conn.execute(`UPDATE memories SET use_count = COALESCE(use_count, 0) + 1, last_used_at = NOW(), updated_at = NOW(), confidence = GREATEST(confidence, ?) WHERE id = ?`, [confidence, latest.id]);
                         await conn.commit();
+                        this.traceTool('memory_store.commit', { branch: 'duplicate', memoryId: latest.id, agentId, memoryKey, projectId: projectId || null, sessionKey: sessionKey || null });
                         await conn.query('SELECT RELEASE_LOCK(?)', [lockName]);
                         conn.release();
-                        return { content: [{ type: 'text', text: `重复记忆已跳过，已更新已有记忆 ${latest.id}` }] };
+                        await this.confirmStoredMemory(latest.id, {
+                            agentId,
+                            scope,
+                            projectId,
+                            sessionKey,
+                            memoryKey
+                        });
+                        this.traceTool('memory_store.finish', { branch: 'duplicate', memoryId: latest.id, agentId, confirmed: true });
+                        return {
+                            content: [{
+                                    type: 'text',
+                                    text: JSON.stringify({
+                                        ok: true,
+                                        action: 'duplicate',
+                                        confirmed: true,
+                                        confirmationSource: 'db',
+                                        memoryId: latest.id,
+                                        agentId,
+                                        scope,
+                                        projectId: projectId || null,
+                                        sessionKey: sessionKey || null,
+                                        memoryKey: memoryKey || null,
+                                        message: `重复记忆已跳过，已更新已有记忆 ${latest.id}`
+                                    }, null, 2)
+                                }]
+                        };
                     }
                 }
                 const newId = await this.insertMemory(agentId, {
@@ -846,8 +1105,8 @@ class MemoryPlugin {
                     category,
                     importance,
                     scope,
-                    projectId: params.projectId,
-                    sessionKey: params.sessionKey,
+                    projectId,
+                    sessionKey,
                     memoryKey,
                     source,
                     confidence,
@@ -861,17 +1120,89 @@ class MemoryPlugin {
                     const latest = existing[0];
                     await this.supersedeRecords(existing.map((row) => row.id), newId, conn);
                     await conn.commit();
+                    this.traceTool('memory_store.commit', { branch: relation, memoryId: newId, agentId, memoryKey, projectId: projectId || null, sessionKey: sessionKey || null });
                     await conn.query('SELECT RELEASE_LOCK(?)', [lockName]);
                     conn.release();
+                    await this.confirmStoredMemory(newId, {
+                        agentId,
+                        scope,
+                        projectId,
+                        sessionKey,
+                        memoryKey
+                    });
                     if (relation === 'conflict') {
-                        return { content: [{ type: 'text', text: `冲突记忆已替换，旧记忆 ${latest.id} 已失效，新记忆 ${newId} 已生效` }] };
+                        this.traceTool('memory_store.finish', { branch: 'conflict', memoryId: newId, agentId, confirmed: true });
+                        return {
+                            content: [{
+                                    type: 'text',
+                                    text: JSON.stringify({
+                                        ok: true,
+                                        action: 'conflict',
+                                        confirmed: true,
+                                        confirmationSource: 'db',
+                                        memoryId: newId,
+                                        supersedesMemoryId: latest.id,
+                                        agentId,
+                                        scope,
+                                        projectId: projectId || null,
+                                        sessionKey: sessionKey || null,
+                                        memoryKey: memoryKey || null,
+                                        message: `冲突记忆已替换，旧记忆 ${latest.id} 已失效，新记忆 ${newId} 已生效`
+                                    }, null, 2)
+                                }]
+                        };
                     }
-                    return { content: [{ type: 'text', text: `记忆已精炼更新，旧记忆 ${latest.id} 已被 ${newId} 替代` }] };
+                    this.traceTool('memory_store.finish', { branch: 'refine', memoryId: newId, agentId, confirmed: true });
+                    return {
+                        content: [{
+                                type: 'text',
+                                text: JSON.stringify({
+                                    ok: true,
+                                    action: 'refine',
+                                    confirmed: true,
+                                    confirmationSource: 'db',
+                                    memoryId: newId,
+                                    supersedesMemoryId: latest.id,
+                                    agentId,
+                                    scope,
+                                    projectId: projectId || null,
+                                    sessionKey: sessionKey || null,
+                                    memoryKey: memoryKey || null,
+                                    message: `记忆已精炼更新，旧记忆 ${latest.id} 已被 ${newId} 替代`
+                                }, null, 2)
+                            }]
+                    };
                 }
                 await conn.commit();
+                this.traceTool('memory_store.commit', { branch: 'insert_tx', memoryId: newId, agentId, memoryKey, projectId: projectId || null, sessionKey: sessionKey || null });
                 await conn.query('SELECT RELEASE_LOCK(?)', [lockName]);
                 conn.release();
-                return { content: [{ type: 'text', text: `记忆已存储: "${content.slice(0, 30)}..." (id=${newId})` }] };
+                await this.confirmStoredMemory(newId, {
+                    agentId,
+                    scope,
+                    projectId,
+                    sessionKey,
+                    memoryKey
+                });
+                this.traceTool('memory_store.finish', { branch: 'insert_tx', memoryId: newId, agentId, confirmed: true });
+                return {
+                    content: [{
+                            type: 'text',
+                            text: JSON.stringify({
+                                ok: true,
+                                action: 'insert',
+                                confirmed: true,
+                                confirmationSource: 'db',
+                                memoryId: newId,
+                                agentId,
+                                scope,
+                                projectId: projectId || null,
+                                sessionKey: sessionKey || null,
+                                memoryKey: memoryKey || null,
+                                message: `记忆已存储: "${content.slice(0, 30)}..." (id=${newId})`
+                            }, null, 2)
+                        }]
+                };
             }
             catch (e) {
                 try {
@@ -891,8 +1222,8 @@ class MemoryPlugin {
             category,
             importance,
             scope,
-            projectId: params.projectId,
-            sessionKey: params.sessionKey,
+            projectId,
+            sessionKey,
             memoryKey,
             source,
             confidence,
@@ -902,44 +1233,175 @@ class MemoryPlugin {
             status: 'active',
             subject
         });
-        return { content: [{ type: 'text', text: `记忆已存储: "${content.slice(0, 30)}..." (id=${newId})` }] };
+        this.traceTool('memory_store.commit', { branch: 'insert_autocommit', memoryId: newId, agentId, memoryKey, projectId: projectId || null, sessionKey: sessionKey || null });
+        await this.confirmStoredMemory(newId, {
+            agentId,
+            scope,
+            projectId,
+            sessionKey,
+            memoryKey
+        });
+        this.traceTool('memory_store.finish', { branch: 'insert_autocommit', memoryId: newId, agentId, confirmed: true });
+        return {
+            content: [{
+                    type: 'text',
+                    text: JSON.stringify({
+                        ok: true,
+                        action: 'insert',
+                        confirmed: true,
+                        confirmationSource: 'db',
+                        memoryId: newId,
+                        agentId,
+                        scope,
+                        projectId: projectId || null,
+                        sessionKey: sessionKey || null,
+                        memoryKey: memoryKey || null,
+                        message: `记忆已存储: "${content.slice(0, 30)}..." (id=${newId})`
+                    }, null, 2)
+                }]
+        };
+    }
+    async handleGet(params) {
+        const agentId = this.normalizeAgentId(params.agentId);
+        this.traceTool('memory_get.start', { memoryId: params.memoryId, agentId });
+        let row = await this.fetchMemoryById(params.memoryId, agentId);
+        let recentCacheHit = false;
+        let retried = false;
+        if (!row) {
+            const recent = this.getRecentConfirmedWriteById(params.memoryId);
+            if (recent) {
+                recentCacheHit = true;
+                retried = true;
+                await this.sleep(30);
+                row = await this.fetchMemoryById(params.memoryId, agentId);
+            }
+        }
+        if (!row) {
+            this.traceTool('memory_get.finish', { memoryId: params.memoryId, agentId, found: false, recentCacheHit, retried });
+            return { content: [{ type: 'text', text: JSON.stringify({ found: false, memoryId: params.memoryId, agentId, recentCacheHit, retried }, null, 2) }] };
+        }
+        this.traceTool('memory_get.finish', { memoryId: params.memoryId, agentId, found: true, recentCacheHit, retried, rowId: row.id });
+        return {
+            content: [{
+                    type: 'text',
+                    text: JSON.stringify({
+                        found: true,
+                        recentCacheHit,
+                        retried,
+                        memory: row
+                    }, null, 2)
+                }]
+        };
     }
     async handleList(params) {
-        const agentId = params.agentId || 'default';
+        const agentId = this.normalizeAgentId(params.agentId);
+        this.traceTool('memory_list.start', {
+            agentId,
+            scope: params.scope || null,
+            status: params.status || null,
+            projectId: params.projectId || null,
+            sessionKey: params.sessionKey || null,
+            memoryKey: params.memoryKey || null,
+            source: params.source || null
+        });
+        const normalizedScope = this.normalizeOptionalString(params.scope);
+        const normalizedStatus = this.normalizeOptionalString(params.status);
+        const normalizedMemoryKey = this.normalizeOptionalString(params.memoryKey);
+        const normalizedSource = this.normalizeOptionalString(params.source);
+        const agentAliases = this.expandAgentAliases(agentId);
+        const projectAliases = this.expandProjectAliases(this.normalizeProjectId(params.projectId));
+        const sessionAliases = this.expandSessionAliases(this.normalizeSessionKey(params.sessionKey));
         const limit = Math.min(Math.max(Number(params.limit || 20), 1), 100);
         const offset = Math.max(Number(params.offset || 0), 0);
+        const exactMatchMode = this.isExactMatchListRequest({
+            scope: normalizedScope,
+            projectAliases,
+            sessionAliases,
+            memoryKey: normalizedMemoryKey,
+            source: normalizedSource
+        });
         let sql = `SELECT id, agent_id, scope, project_id, session_key, memory_key, status, source, category, importance, confidence, ttl_type, expires_at, use_count, last_used_at, created_at, updated_at, content
                    FROM memories
-                   WHERE agent_id = ?`;
-        const queryParams = [agentId];
-        if (params.scope) {
+                   WHERE 1=1`;
+        const queryParams = [];
+        sql = this.appendInFilter(sql, 'agent_id', agentAliases, queryParams);
+        if (normalizedScope) {
             sql += ' AND scope = ?';
-            queryParams.push(params.scope);
+            queryParams.push(normalizedScope);
         }
-        if (params.status) {
+        if (normalizedStatus) {
             sql += ' AND status = ?';
-            queryParams.push(params.status);
+            queryParams.push(normalizedStatus);
         }
-        if (params.projectId) {
-            sql += ' AND project_id = ?';
-            queryParams.push(params.projectId);
+        if (projectAliases.length) {
+            sql = this.appendInFilter(sql, 'project_id', projectAliases, queryParams);
         }
-        if (params.sessionKey) {
-            sql += ' AND session_key = ?';
-            queryParams.push(params.sessionKey);
+        if (sessionAliases.length) {
+            sql = this.appendInFilter(sql, 'session_key', sessionAliases, queryParams);
         }
-        if (params.memoryKey) {
+        if (normalizedMemoryKey) {
             sql += ' AND memory_key = ?';
-            queryParams.push(params.memoryKey);
+            queryParams.push(normalizedMemoryKey);
         }
-        if (params.source) {
+        if (normalizedSource) {
             sql += ' AND source = ?';
-            queryParams.push(params.source);
+            queryParams.push(normalizedSource);
         }
         sql += ' ORDER BY id DESC LIMIT ? OFFSET ?';
         queryParams.push(limit, offset);
-        const [rows] = await this.pool.query(sql, queryParams);
-        const result = Array.isArray(rows) ? rows : [];
+        const runListQuery = async () => {
+            const [rows] = await this.pool.query(sql, queryParams);
+            return Array.isArray(rows) ? rows : [];
+        };
+        let result = await runListQuery();
+        let retried = false;
+        let recentCacheHit = false;
+        let fallbackById = false;
+        let fallbackMemoryId = null;
+        if (!result.length && exactMatchMode) {
+            const recentEntries = this.getRecentConfirmedWritesByExactKey({
+                agentId,
+                scope: normalizedScope || '',
+                projectId: this.normalizeProjectId(params.projectId),
+                sessionKey: this.normalizeSessionKey(params.sessionKey),
+                memoryKey: normalizedMemoryKey,
+                source: normalizedSource,
+                status: normalizedStatus
+            });
+            if (recentEntries.length)
+                recentCacheHit = true;
+            retried = true;
+            await this.sleep(30);
+            result = await runListQuery();
+            if (!result.length && recentEntries.length) {
+                for (const entry of recentEntries) {
+                    const row = await this.fetchMemoryById(entry.memoryId, agentId);
+                    if (row && this.rowMatchesExactFilters(row, {
+                        agentAliases,
+                        scope: normalizedScope,
+                        status: normalizedStatus,
+                        projectAliases,
+                        sessionAliases,
+                        memoryKey: normalizedMemoryKey,
+                        source: normalizedSource
+                    })) {
+                        result = [row];
+                        fallbackById = true;
+                        fallbackMemoryId = entry.memoryId;
+                        break;
+                    }
+                }
+            }
+        }
+        this.traceTool('memory_list.finish', {
+            agentId,
+            total: result.length,
+            exactMatchMode,
+            retried,
+            recentCacheHit,
+            fallbackById,
+            fallbackMemoryId
+        });
         return {
             content: [{
                     type: 'text',
@@ -947,13 +1409,19 @@ class MemoryPlugin {
                         total: result.length,
                         limit,
                         offset,
+                        exactMatchMode,
+                        retried,
+                        recentCacheHit,
+                        fallbackById,
+                        fallbackMemoryId,
                         items: result
                     }, null, 2)
                 }]
         };
     }
     async handleUpdate(params) {
-        const agentId = params.agentId || 'default';
+        const agentId = this.normalizeAgentId(params.agentId);
+        const agentAliases = this.expandAgentAliases(agentId);
         const updates = [];
         const values = [];
         if (typeof params.status === 'string') {
@@ -982,7 +1450,7 @@ class MemoryPlugin {
         }
         if (Object.prototype.hasOwnProperty.call(params, 'expiresAt')) {
             updates.push('expires_at = ?');
-            values.push(params.expiresAt || null);
+            values.push(this.normalizeExpiresAt(params.expiresAt));
         }
         if (typeof params.content === 'string' && params.content.trim()) {
             const emb = await this.getEmbedding(params.content);
@@ -996,8 +1464,8 @@ class MemoryPlugin {
         }
         updates.push('updated_at = NOW()');
         values.push(params.memoryId);
-        values.push(agentId);
-        const [result] = await this.pool.execute(`UPDATE memories SET ${updates.join(', ')} WHERE id = ? AND agent_id = ?`, values);
+        values.push(...agentAliases);
+        const [result] = await this.pool.execute(`UPDATE memories SET ${updates.join(', ')} WHERE id = ? AND agent_id IN (${agentAliases.map(() => '?').join(',')})`, values);
         if (!result || result.affectedRows === 0) {
             return { content: [{ type: 'text', text: `记忆 ${params.memoryId} 不存在或未更新` }] };
         }
@@ -1056,6 +1524,10 @@ class MemoryPlugin {
             };
         }
         if (params.query) {
+            const agentId = this.normalizeAgentId(params.agentId);
+            const agentCandidates = this.expandAgentAliases(agentId);
+            const projectCandidates = this.expandProjectAliases(params.projectId);
+            const sessionCandidates = this.expandSessionAliases(params.sessionKey);
             const recall = await this.handleRecall({
                 query: params.query,
                 agentId: params.agentId,
@@ -1073,11 +1545,20 @@ class MemoryPlugin {
                             mode: 'query',
                             query: params.query,
                             filters: {
-                                agentId: params.agentId || 'default',
+                                agentId,
                                 scope: params.scope || null,
                                 projectId: params.projectId || null,
                                 sessionKey: params.sessionKey || null,
                                 minScore: typeof params.minScore === 'number' ? params.minScore : (this.config.minRecallScore || 0.3)
+                            },
+                            filterPlan: {
+                                agentCandidates,
+                                projectCandidates,
+                                sessionCandidates,
+                                strategy: {
+                                    project: projectCandidates.length ? 'project_id IN aliases OR project_id IS NULL' : 'no project filter',
+                                    session: sessionCandidates.length ? 'session_key IN aliases OR session_key IS NULL' : 'no session filter'
+                                }
                             },
                             recall_preview: text
                         }, null, 2)
@@ -1087,8 +1568,9 @@ class MemoryPlugin {
         return { content: [{ type: 'text', text: '请提供 memoryId 或 query' }] };
     }
     async handleForget(params) {
-        const agentId = params.agentId || 'default';
-        const [result] = await this.pool.execute(`UPDATE memories SET valid = 0, status = 'deleted', updated_at = NOW() WHERE id = ? AND agent_id = ?`, [params.memoryId, agentId]);
+        const agentId = this.normalizeAgentId(params.agentId);
+        const agentAliases = this.expandAgentAliases(agentId);
+        const [result] = await this.pool.execute(`UPDATE memories SET valid = 0, status = 'deleted', updated_at = NOW() WHERE id = ? AND agent_id IN (${agentAliases.map(() => '?').join(',')})`, [params.memoryId, ...agentAliases]);
         if (!result || result.affectedRows === 0) {
             return { content: [{ type: 'text', text: `记忆 ${params.memoryId} 不存在或无权限` }] };
         }
