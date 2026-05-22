@@ -20,6 +20,6 @@ interface OpenClawPluginApi {
 }
 declare const plugin: {
     id: string;
-    register: (api: OpenClawPluginApi) => Promise<void>;
+    register: (api: OpenClawPluginApi) => void;
 };
 export default plugin;

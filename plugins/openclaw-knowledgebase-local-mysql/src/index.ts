@@ -64,6 +64,8 @@ class KnowledgeBasePlugin {
     private config: PluginConfig;
     private mysqlPool: any = null;
     private ollamaBaseUrl: string;
+    private initialized: boolean = false;
+    private initPromise: Promise<void> | null = null;
 
     constructor(api: OpenClawPluginApi) {
         this.api = api;
@@ -72,18 +74,31 @@ class KnowledgeBasePlugin {
     }
 
     /**
-     * 插件注册入口
+     * 插件注册入口（同步，符合OpenClaw规范）
      */
-    async register() {
+    register() {
         this.api.logger.info('[kb-local] 注册知识库插件...');
         
-        // 初始化 MySQL 连接池
-        await this.initMySQL();
-        
-        // 注册工具
+        // 仅同步注册工具，初始化逻辑移到首次调用时懒执行
         this.registerTools();
         
         this.api.logger.info('[kb-local] 知识库插件注册完成');
+    }
+
+    /**
+     * 确保初始化完成（懒加载异步逻辑）
+     */
+    private async ensureInitialized() {
+        if (this.initialized) return;
+        if (this.initPromise) return this.initPromise;
+        
+        this.initPromise = (async () => {
+            this.api.logger.info('[kb-local] 首次调用，初始化MySQL连接池...');
+            await this.initMySQL();
+            this.initialized = true;
+            this.api.logger.info('[kb-local] 初始化完成');
+        })();
+        return this.initPromise;
     }
 
     /**
@@ -124,6 +139,7 @@ class KnowledgeBasePlugin {
                 required: ['text']
             },
             execute: async (_toolCallId: string, params: any) => {
+                await this.ensureInitialized();
                 return this.handleKBStore({ ...params, agentId: params.agentId || ctx?.agentId });
             }
         }));
@@ -144,6 +160,7 @@ class KnowledgeBasePlugin {
                 required: ['texts']
             },
             execute: async (_toolCallId: string, params: any) => {
+                await this.ensureInitialized();
                 return this.handleKBStoreBatch({ ...params, agentId: params.agentId || ctx?.agentId });
             }
         }));
@@ -165,6 +182,7 @@ class KnowledgeBasePlugin {
                 required: ['query']
             },
             execute: async (_toolCallId: string, params: any) => {
+                await this.ensureInitialized();
                 return this.handleKBSearch({ ...params, agentId: params.agentId || ctx?.agentId });
             }
         }));
@@ -182,6 +200,7 @@ class KnowledgeBasePlugin {
                 }
             },
             execute: async (_toolCallId: string, params: any) => {
+                await this.ensureInitialized();
                 return this.handleKBScan({ ...params, agentId: params.agentId || ctx?.agentId });
             }
         }));
@@ -422,9 +441,9 @@ class KnowledgeBasePlugin {
 // 插件导出
 const plugin = {
     id: 'openclaw-knowledgebase-local-mysql',
-    register: async (api: OpenClawPluginApi) => {
+    register: (api: OpenClawPluginApi) => {
         const instance = new KnowledgeBasePlugin(api);
-        await instance.register();
+        instance.register();
     }
 };
 
