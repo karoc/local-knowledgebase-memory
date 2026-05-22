@@ -1,9 +1,4 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.MEMORY_KEY_RULES = void 0;
-exports.getMemoryKeyRule = getMemoryKeyRule;
-exports.isSingleActiveKey = isSingleActiveKey;
-exports.MEMORY_KEY_RULES = [
+export const MEMORY_KEY_RULES = [
     // A. 用户偏好
     { key: 'user.output.style', domain: 'user', scopeDefault: 'global', uniqueness: 'single_active' },
     { key: 'user.output.length', domain: 'user', scopeDefault: 'global', uniqueness: 'single_active' },
@@ -62,13 +57,13 @@ exports.MEMORY_KEY_RULES = [
     { key: 'session.decision.pending_plan', domain: 'session', scopeDefault: 'session', uniqueness: 'multi_active' },
     { key: 'session.decision.approved_direction', domain: 'session', scopeDefault: 'session', uniqueness: 'multi_active' }
 ];
-const KEY_MAP = new Map(exports.MEMORY_KEY_RULES.map((x) => [x.key, x]));
-function getMemoryKeyRule(key) {
+const KEY_MAP = new Map(MEMORY_KEY_RULES.map((x) => [x.key, x]));
+export function getMemoryKeyRule(key) {
     if (!key)
         return null;
     return KEY_MAP.get(key) || null;
 }
-function isSingleActiveKey(key) {
+export function isSingleActiveKey(key) {
     const rule = getMemoryKeyRule(key);
     return !!rule && rule.uniqueness === 'single_active';
 }

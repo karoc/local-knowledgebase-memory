@@ -1,10 +1,8 @@
-/**
- * OpenClaw 记忆插件 - 自建 MySQL + Ollama
- * 增强版 v1：支持 scope / memory_key / status / TTL / duplicate-refine-conflict 治理
- */
-import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
-declare const plugin: {
+declare const _default: {
     id: string;
-    register: (api: OpenClawPluginApi) => void;
-};
-export default plugin;
+    name: string;
+    description: string;
+    configSchema: import("openclaw/plugin-sdk/plugin-entry").OpenClawPluginConfigSchema;
+    register: NonNullable<import("openclaw/plugin-sdk/plugin-entry").OpenClawPluginDefinition["register"]>;
+} & Pick<import("openclaw/plugin-sdk/plugin-entry").OpenClawPluginDefinition, "kind" | "reload" | "nodeHostCommands" | "securityAuditCollectors">;
+export default _default;

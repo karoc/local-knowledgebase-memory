@@ -2,8 +2,9 @@
  * OpenClaw 记忆插件 - 自建 MySQL + Ollama
  * 增强版 v1：支持 scope / memory_key / status / TTL / duplicate-refine-conflict 治理
  */
-import type { OpenClawPluginApi, HookEvent, HookContext } from 'openclaw/plugin-sdk';
-import { isSingleActiveKey } from './key-registry';
+import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry';
+import type { OpenClawPluginApi, OpenClawPluginToolContext } from 'openclaw/plugin-sdk/plugin-entry';
+import { isSingleActiveKey } from './key-registry.js';
 
 type MemoryScope = 'global' | 'project' | 'session';
 type MemoryStatus = 'active' | 'superseded' | 'deleted' | 'conflicted' | 'expired';
@@ -166,7 +167,7 @@ class MemoryPlugin {
 
     constructor(api: OpenClawPluginApi) {
         this.api = api;
-        this.config = api.pluginConfig as PluginConfig;
+        this.config = api.pluginConfig as unknown as PluginConfig;
     }
 
     private normalizeAgentId(agentId?: string | null): string {
@@ -258,7 +259,7 @@ class MemoryPlugin {
         if (this.config.autoRecall !== false) this.api.on('before_agent_start', this.onBeforeStart.bind(this));
         if (this.config.autoCapture !== false) this.api.on('agent_end', this.onAgentEnd.bind(this));
         this.startHealthLoop();
-        void this.expireSessionMemories().catch((err) => this.api.logger.error('[memory-local] 过期清理失败:', err));
+        void this.expireSessionMemories().catch((err) => this.api.logger.error('[memory-local] 过期清理失败: ' + String(err)));
         this.api.logger.info('[memory-local] 记忆插件注册完成');
     }
 
@@ -289,21 +290,21 @@ class MemoryPlugin {
                 fs.writeFileSync(storePath, '');
             }
         } catch (err) {
-            this.api.logger.warn('[memory-local] ensure status store path failed', err);
+            this.api.logger.warn('[memory-local] ensure status store path failed: ' + String(err));
         }
     }
 
     private registerMemoryRuntime() {
         if (!this.statusManager) this.statusManager = this.buildStatusManager();
 
-        (this.api as any).registerMemoryRuntime({
-            getMemorySearchManager: async (args: { purpose?: string } = {}) => {
-                const purpose = args?.purpose;
+        this.api.registerMemoryRuntime({
+            getMemorySearchManager: async (params: { cfg?: any; agentId: string; purpose?: string }) => {
+                const purpose = params?.purpose;
                 if (purpose === 'status') {
                     try {
                         await this.runHealthCheck();
                     } catch (err) {
-                        this.api.logger.warn('[memory-local] status health check failed', err);
+                        this.api.logger.warn('[memory-local] status health check failed: ' + String(err));
                     }
                     return { manager: this.statusManager };
                 }
@@ -312,12 +313,8 @@ class MemoryPlugin {
                 }
                 return { manager: this.statusManager };
             },
-            resolveMemoryBackendConfig: () => ({
-                backend: 'qmd',
-                qmd: {
-                    provider: 'mysql',
-                    database: this.config.mysql.database
-                }
+            resolveMemoryBackendConfig: (_params: { cfg?: any; agentId: string }) => ({
+                backend: 'qmd' as const
             }),
             closeAllMemorySearchManagers: async () => {
                 return;
@@ -376,7 +373,7 @@ class MemoryPlugin {
         const run = () => void this.runHealthCheck().catch((err) => {
             this.health.status = 'unavailable';
             this.health.lastError = String(err);
-            this.api.logger.error('[memory-local] health check failed', err);
+            this.api.logger.error('[memory-local] health check failed: ' + String(err));
         });
         run();
         if (this.healthTimer) clearInterval(this.healthTimer);
@@ -436,7 +433,7 @@ class MemoryPlugin {
     }
 
     private registerTools() {
-        this.api.registerTool((ctx: HookContext) => ({
+        this.api.registerTool((ctx: OpenClawPluginToolContext) => ({
             name: 'memory_recall',
             label: '回忆记忆',
             description: '通过向量相似度检索相关记忆',
@@ -455,9 +452,9 @@ class MemoryPlugin {
             },
             execute: async (_toolCallId: string, params: RecallParams) =>
                 this.handleRecall({ ...params, agentId: params.agentId || ctx?.agentId })
-        }));
+        }) as any);
 
-        this.api.registerTool((ctx: HookContext) => ({
+        this.api.registerTool((ctx: OpenClawPluginToolContext) => ({
             name: 'memory_store',
             label: '存储记忆',
             description: '存储新的记忆',
@@ -480,9 +477,9 @@ class MemoryPlugin {
                 required: ['content']
             },
             execute: async (_toolCallId: string, params: StoreParams) => this.handleStore(params, ctx?.agentId)
-        }));
+        }) as any);
 
-        this.api.registerTool((ctx: HookContext) => ({
+        this.api.registerTool((ctx: OpenClawPluginToolContext) => ({
             name: 'memory_forget',
             label: '忘记记忆',
             description: '删除指定记忆',
@@ -494,11 +491,11 @@ class MemoryPlugin {
                 },
                 required: ['memoryId']
             },
-            execute: async (_toolCallId: string, params: ForgetParams, ctx: any) =>
+            execute: async (_toolCallId: string, params: ForgetParams) =>
                 this.handleForget({ ...params, agentId: params.agentId || ctx?.agentId })
-        }));
+        }) as any);
 
-        this.api.registerTool((ctx: HookContext) => ({
+        this.api.registerTool((ctx: OpenClawPluginToolContext) => ({
             name: 'memory_get',
             label: '读取记忆',
             description: '按 ID 读取单条记忆，适合做写后确认',
@@ -512,9 +509,9 @@ class MemoryPlugin {
             },
             execute: async (_toolCallId: string, params: GetParams) =>
                 this.handleGet({ ...params, agentId: params.agentId || ctx?.agentId })
-        }));
+        }) as any);
 
-        this.api.registerTool((ctx: HookContext) => ({
+        this.api.registerTool((ctx: OpenClawPluginToolContext) => ({
             name: 'memory_list',
             label: '查询记忆',
             description: '按条件查询记忆列表',
@@ -534,9 +531,9 @@ class MemoryPlugin {
             },
             execute: async (_toolCallId: string, params: ListParams) =>
                 this.handleList({ ...params, agentId: params.agentId || ctx?.agentId })
-        }));
+        }) as any);
 
-        this.api.registerTool((ctx: HookContext) => ({
+        this.api.registerTool((ctx: OpenClawPluginToolContext) => ({
             name: 'memory_update',
             label: '更新记忆',
             description: '更新记忆内容、状态或元数据',
@@ -554,11 +551,11 @@ class MemoryPlugin {
                 },
                 required: ['memoryId']
             },
-            execute: async (_toolCallId: string, params: UpdateParams, ctx: any) =>
+            execute: async (_toolCallId: string, params: UpdateParams) =>
                 this.handleUpdate({ ...params, agentId: params.agentId || ctx?.agentId })
-        }));
+        }) as any);
 
-        this.api.registerTool((ctx: HookContext) => ({
+        this.api.registerTool((ctx: OpenClawPluginToolContext) => ({
             name: 'memory_explain',
             label: '解释记忆',
             description: '解释某条记忆为何被召回或被替代',
@@ -576,7 +573,7 @@ class MemoryPlugin {
             },
             execute: async (_toolCallId: string, params: ExplainParams) =>
                 this.handleExplain({ ...params, agentId: params.agentId || ctx?.agentId })
-        }));
+        }) as any);
     }
 
     private sessionTtlDays(): number {
@@ -1102,9 +1099,9 @@ class MemoryPlugin {
         return patterns.some(p => p.test(msg));
     }
 
-    private async onBeforeStart(event: HookEvent, ctx: HookContext) {
+    private async onBeforeStart(event: { prompt: string; runId?: string; messages?: unknown[] }, ctx: { agentId?: string; sessionKey?: string; sessionId?: string; workspaceDir?: string }) {
         try {
-            const msg = event.messages?.[0]?.content || '';
+            const msg = (event.messages?.[0] as any)?.content || event.prompt || '';
             if (!msg || msg.length < 5) return {};
             const agentId = ctx.agentId || 'default';
             const qEmb = await this.getEmbedding(msg);
@@ -1115,10 +1112,6 @@ class MemoryPlugin {
                          AND status = 'active'
                          AND (expires_at IS NULL OR expires_at > NOW())`;
             const params: any[] = [agentId];
-            if (ctx.projectId) {
-                sql += ' AND (project_id = ? OR project_id IS NULL)';
-                params.push(ctx.projectId);
-            }
             if (ctx.sessionKey) {
                 sql += ' AND (session_key = ? OR session_key IS NULL)';
                 params.push(ctx.sessionKey);
@@ -1140,13 +1133,13 @@ class MemoryPlugin {
                 const ctxText = scored.map((m: any) => `[记忆-${m.category}${m.memory_key ? `:${m.memory_key}` : ''}] ${m.content}`).join('\n');
                 return { prependContext: `以下是你之前记住的相关信息:\n${ctxText}\n` };
             }
-        } catch (e) { this.api.logger.error('[memory-local] 召回失败:', e); }
+        } catch (e) { this.api.logger.error('[memory-local] 召回失败: ' + String(e)); }
         return {};
     }
 
-    private async onAgentEnd(event: HookEvent, ctx: HookContext) {
+    private async onAgentEnd(event: { messages: unknown[]; success: boolean; error?: string; durationMs?: number }, ctx: { agentId?: string; sessionKey?: string; workspaceDir?: string }) {
         try {
-            const msg = event.messages?.[0]?.content || '';
+            const msg = (event.messages?.[0] as any)?.content || '';
             if (!msg || msg.length < 10) return;
             if (!this.shouldAutoCapture(msg)) return;
             const scope: MemoryScope = this.detectAutoScope(msg);
@@ -1157,14 +1150,13 @@ class MemoryPlugin {
                 category,
                 importance: 3,
                 scope,
-                projectId: ctx.projectId,
                 sessionKey: ctx.sessionKey,
                 memoryKey: memoryKey || undefined,
                 source: 'auto',
                 confidence: 0.85
             }, ctx.agentId || 'default');
             this.api.logger.info(`[memory-local] 自动捕获新记忆 scope=${scope}${memoryKey ? ` key=${memoryKey}` : ''}${subject ? ` subject=${subject}` : ''}`);
-        } catch (e) { this.api.logger.error('[memory-local] 捕获失败:', e); }
+        } catch (e) { this.api.logger.error('[memory-local] 捕获失败: ' + String(e)); }
     }
 
     async handleRecall(params: RecallParams) {
@@ -1860,12 +1852,12 @@ class MemoryPlugin {
     }
 }
 
-const plugin = {
+export default definePluginEntry({
     id: 'openclaw-memory-local-mysql',
+    name: 'OpenClaw Memory (MySQL + Ollama)',
+    description: 'OpenClaw 记忆插件 - 自建 MySQL + Ollama 向量存储，支持自动召回/捕获、scope/memory_key/status/TTL 治理',
     register: (api: OpenClawPluginApi) => {
         const inst = new MemoryPlugin(api);
         inst.register();
     }
-};
-
-export default plugin;
+});

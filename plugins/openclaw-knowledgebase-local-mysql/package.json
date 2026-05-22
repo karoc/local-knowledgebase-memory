@@ -1,11 +1,14 @@
 {
   "name": "openclaw-knowledgebase-local-mysql",
   "version": "1.0.0",
+  "type": "module",
   "description": "OpenClaw 知识库插件 - 自建 MySQL + Ollama 向量存储",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "openclaw": {
-    "extensions": ["./dist/index.js"]
+    "extensions": [
+      "./dist/index.js"
+    ]
   },
   "scripts": {
     "build": "tsc",
@@ -16,9 +19,16 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "openclaw": "^2026.5.20",
     "typescript": "^5.0.0"
   },
-  "keywords": ["openclaw", "plugin", "knowledge-base", "mysql", "vector"],
+  "keywords": [
+    "openclaw",
+    "plugin",
+    "knowledge-base",
+    "mysql",
+    "vector"
+  ],
   "author": "",
   "license": "MIT"
 }

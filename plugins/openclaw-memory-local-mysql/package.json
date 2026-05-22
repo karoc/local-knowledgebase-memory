@@ -1,6 +1,7 @@
 {
   "name": "openclaw-memory-local-mysql",
   "version": "1.0.0",
+  "type": "module",
   "description": "OpenClaw 记忆插件 - 自建 MySQL + Ollama",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -10,7 +11,7 @@
     ]
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc",
     "clean": "rimraf dist"
   },
   "files": [
@@ -22,6 +23,8 @@
     "mysql2": "^3.6.0"
   },
   "devDependencies": {
+    "@types/node": "^20.0.0",
+    "openclaw": "^2026.5.20",
     "rimraf": "^5.0.5",
     "typescript": "^5.9.3"
   }
